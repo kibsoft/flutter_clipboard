@@ -45,6 +45,59 @@ using flutter::EncodableValue;
 
 namespace {
 
+// Lenient UTF-8 to UTF-8 sanitizer: replaces invalid sequences with U+FFFD.
+// Use when clipboard HTML may be UTF-8 with a few bad bytes (avoids mojibake
+// from falling back to CP_ACP on mixed/invalid UTF-8).
+static std::string SanitizeToUtf8(const std::string& raw) {
+  const unsigned char* p = reinterpret_cast<const unsigned char*>(raw.data());
+  const unsigned char* end = p + raw.size();
+  std::vector<wchar_t> wide;
+
+  while (p < end) {
+    wchar_t wc = L'\uFFFD';
+    if (*p < 0x80) {
+      wc = *p++;
+    } else if (*p >= 0xC2 && *p <= 0xDF && p + 1 < end &&
+               (p[1] & 0xC0) == 0x80) {
+      wc = ((p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+      p += 2;
+    } else if (*p >= 0xE0 && *p <= 0xEF && p + 2 < end &&
+               (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+      wc = ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+      p += 3;
+    } else if (*p >= 0xF0 && *p <= 0xF4 && p + 3 < end &&
+               (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80 &&
+               (p[3] & 0xC0) == 0x80) {
+      wc = ((p[0] & 0x07) << 18) | ((p[1] & 0x3F) << 12) |
+           ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+      if (wc <= 0x10FFFF) {
+        p += 4;
+        if (wc > 0xFFFF) {
+          wide.push_back(static_cast<wchar_t>(0xD800 + ((wc - 0x10000) >> 10)));
+          wide.push_back(static_cast<wchar_t>(0xDC00 + ((wc - 0x10000) & 0x3FF)));
+        } else {
+          wide.push_back(static_cast<wchar_t>(wc));
+        }
+        continue;
+      }
+      p++;
+    } else {
+      p++;
+    }
+    if (wc <= 0xFFFF) {
+      wide.push_back(static_cast<wchar_t>(wc));
+    }
+  }
+  wide.push_back(L'\0');
+
+  int utf8_size = WideCharToMultiByte(CP_UTF8, 0, wide.data(), -1, NULL, 0,
+                                      NULL, NULL);
+  std::vector<char> utf8(utf8_size);
+  WideCharToMultiByte(CP_UTF8, 0, wide.data(), -1, &utf8[0], utf8_size, NULL,
+                     NULL);
+  return std::string(&utf8[0]);
+}
+
 class ClipboardPluginImpl {
  public:
   static void RegisterWithRegistrar(FlutterDesktopPluginRegistrarRef registrar_ref) {
@@ -549,15 +602,34 @@ class ClipboardPluginImpl {
       }
       result_map[EncodableValue("text")] = EncodableValue(text);
 
-      // Get HTML
+      // Get HTML - convert to valid UTF-8 (some apps put CF_HTML in Windows-1252 etc.)
       UINT cf_html = RegisterClipboardFormatA("HTML Format");
       std::string html;
       if (cf_html != 0 && IsClipboardFormatAvailable(cf_html)) {
         HGLOBAL hMem = GetClipboardData(cf_html);
         if (hMem) {
           char* pMem = (char*)GlobalLock(hMem);
-          html = std::string(pMem);
+          std::string raw(pMem);
           GlobalUnlock(hMem);
+
+          int wide_size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                             raw.c_str(), -1, NULL, 0);
+          if (wide_size > 0) {
+            std::vector<wchar_t> wide(wide_size);
+            MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, raw.c_str(), -1,
+                                &wide[0], wide_size);
+            int utf8_size = WideCharToMultiByte(CP_UTF8, 0, &wide[0], -1, NULL,
+                                               0, NULL, NULL);
+            std::vector<char> utf8(utf8_size);
+            WideCharToMultiByte(CP_UTF8, 0, &wide[0], -1, &utf8[0], utf8_size,
+                               NULL, NULL);
+            html = std::string(&utf8[0]);
+          } else {
+            // Strict UTF-8 failed. Use lenient decoder (replaces invalid bytes with U+FFFD)
+            // to avoid mojibake when source is UTF-8 with a few bad bytes. CP_ACP would
+            // misinterpret UTF-8 bytes and produce "РќРѕРјРµСЂ" instead of "Номер".
+            html = SanitizeToUtf8(raw);
+          }
         }
       }
       result_map[EncodableValue("html")] = EncodableValue(html);
