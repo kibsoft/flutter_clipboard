@@ -98,6 +98,39 @@ static std::string SanitizeToUtf8(const std::string& raw) {
   return std::string(&utf8[0]);
 }
 
+// Clipboard must already be open. Reads Explorer file copies via CF_HDROP.
+static EncodableList GetOpenClipboardFilePaths() {
+  EncodableList paths;
+  if (!IsClipboardFormatAvailable(CF_HDROP)) {
+    return paths;
+  }
+  HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
+  if (!hDrop) {
+    return paths;
+  }
+  UINT fileCount = DragQueryFile(hDrop, 0xFFFFFFFF, nullptr, 0);
+  for (UINT i = 0; i < fileCount; i++) {
+    UINT pathLen = DragQueryFile(hDrop, i, nullptr, 0);
+    if (pathLen == 0) {
+      continue;
+    }
+    std::vector<wchar_t> filePath(pathLen + 1);
+    if (DragQueryFile(hDrop, i, filePath.data(), pathLen + 1) == 0) {
+      continue;
+    }
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, filePath.data(), -1,
+                                          NULL, 0, NULL, NULL);
+    if (size_needed <= 1) {
+      continue;
+    }
+    std::vector<char> utf8(size_needed);
+    WideCharToMultiByte(CP_UTF8, 0, filePath.data(), -1, &utf8[0],
+                        size_needed, NULL, NULL);
+    paths.push_back(EncodableValue(std::string(&utf8[0])));
+  }
+  return paths;
+}
+
 class ClipboardPluginImpl {
  public:
   static void RegisterWithRegistrar(FlutterDesktopPluginRegistrarRef registrar_ref) {
@@ -633,6 +666,7 @@ class ClipboardPluginImpl {
         }
       }
       result_map[EncodableValue("html")] = EncodableValue(html);
+      result_map[EncodableValue("filePaths")] = GetOpenClipboardFilePaths();
 
       result_map[EncodableValue("timestamp")] = EncodableValue(static_cast<int64_t>(GetTickCount64()));
       

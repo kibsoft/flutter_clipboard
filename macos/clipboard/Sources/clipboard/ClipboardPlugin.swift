@@ -125,16 +125,22 @@ public class ClipboardPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         case "pasteRichText":
             let text = pasteboard.string(forType: .string) ?? ""
             let html = pasteboard.string(forType: .html)
-            let imageBytes = getImageBytesFromClipboard()
+            let filePaths = getFilePathsFromClipboard()
+            // Finder file copies also put a TIFF/ICNS icon on the pasteboard.
+            // Prefer real file URLs and skip that preview image.
+            let imageBytes = filePaths.isEmpty ? getImageBytesFromClipboard() : nil
             result([
                 "text": text,
                 "html": (html ?? NSNull()) as Any,
                 "imageBytes": (imageBytes ?? NSNull()) as Any,
+                "filePaths": filePaths,
                 "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
             ])
             
         case "pasteImage":
-            let imageBytes = getImageBytesFromClipboard()
+            let imageBytes = getFilePathsFromClipboard().isEmpty
+                ? getImageBytesFromClipboard()
+                : nil
             if let bytes = imageBytes {
                 result(["imageBytes": bytes])
             } else {
@@ -225,6 +231,35 @@ public class ClipboardPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
         return nil
     }
     
+    /// File URLs from Finder copy (`public.file-url` / `NSFilenamesPboardType`).
+    private func getFilePathsFromClipboard() -> [String] {
+        let pasteboard = NSPasteboard.general
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        if let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: options
+        ) as? [URL] {
+            let paths = urls.compactMap { url -> String? in
+                guard url.isFileURL else { return nil }
+                let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+                return path.isEmpty ? nil : path
+            }
+            if !paths.isEmpty {
+                return paths
+            }
+        }
+
+        let filenamesType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+        if let filenames = pasteboard.propertyList(forType: filenamesType) as? [String] {
+            return filenames.filter {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }
+        return []
+    }
+
     private func getImageBytesFromClipboard() -> [Int]? {
         let pasteboard = NSPasteboard.general
         

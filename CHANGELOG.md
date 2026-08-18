@@ -1,3 +1,8 @@
+## 3.0.15
+
+* **Desktop File Paste**: `pasteRichText` now returns Finder/Explorer file paths in `filePaths`.
+* **macOS Finder Icon Fix**: Skip the TIFF/ICNS file-icon preview when file URLs are present, so copied documents are not treated as images.
+
 ## 3.0.14
 
 * **Swift Package Manager Support**: Migrated iOS and macOS plugins from CocoaPods to Swift Package Manager (SPM) for better compatibility and future-proofing.
