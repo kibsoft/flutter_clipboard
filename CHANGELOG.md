@@ -2,6 +2,7 @@
 
 * **Desktop File Paste**: `pasteRichText` now returns Finder/Explorer file paths in `filePaths`.
 * **macOS Finder Icon Fix**: Skip the TIFF/ICNS file-icon preview when file URLs are present, so copied documents are not treated as images.
+* **Windows UTF-8 Sanitization**: Invalid UTF-8 sequences in clipboard HTML are replaced with U+FFFD to avoid mojibake.
 
 ## 3.0.14
 
